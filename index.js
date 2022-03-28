@@ -56,24 +56,56 @@
 // Global vars so recursion can be paused and resume where it left off
 // to prevent recursion from blocking the browser's handling of user events.
 
+/** @type {?Fiber} */
+let nextUnitOfWorkFiber = null;
+
+/** @type {?Fiber} */
+let currentRootFiber = null;
+
+/** @type {?Fiber} */
+let wipRootFiber = null;
+
+/** @type {?Fiber[]} */
+let fibersToDelete = null;
+
+/** @type {?Fiber} */
+let wipFiber = null;
+
+/** @type {number} */
+let currHookIndex = null;
+
 const Act = {
   createElement,
   render,
   useState,
 };
 
+/**
+ *
+ * @param {Fiber.type} type
+ * @param {Props} props
+ * @param  {...ElementPOJO} children
+ * @returns {ElementPOJO}
+ */
 function createElement(type, props, ...children) {
   return {
     type,
     props: {
       ...props,
-      children: children.map((child) =>
-        typeof child === 'object' ? child : createTextElement(child)
-      ),
+      children: children
+        .flat()
+        .map((child) =>
+          typeof child === 'object' ? child : createTextElement(child)
+        ),
     },
   };
 }
 
+/**
+ *
+ * @param {string} text
+ * @returns {ElementPOJO}
+ */
 function createTextElement(text) {
   return {
     type: 'TEXT_ELEMENT',
@@ -84,6 +116,11 @@ function createTextElement(text) {
   };
 }
 
+/**
+ *
+ * @param {Fiber} fiber
+ * @returns {Node}
+ */
 function createDom(fiber) {
   const dom =
     fiber.type == 'TEXT_ELEMENT'
@@ -95,62 +132,100 @@ function createDom(fiber) {
   return dom;
 }
 
+/**
+ *
+ * @param {string} key
+ */
 const isEvent = (key) => key.startsWith('on');
+/**
+ *
+ * @param {string} key
+ */
 const isProperty = (key) => key !== 'children' && !isEvent(key);
-const isNew = (prev, next) => (key) => prev[key] !== next[key];
-const isGone = (prev, next) => (key) => !(key in next);
+
+/**
+ *
+ * @param {Props} prevProps
+ * @param {Props} nextProps
+ */
+const isPropNew = (prevProps, nextProps) => (prop) =>
+  prevProps[prop] !== nextProps[prop];
+
+/**
+ *
+ * @param {Props} prevProps
+ * @param {Props} nextProps
+ */
+const isPropRemoved = (prevProps, nextProps) => (prop) => !(prop in nextProps);
+
+/**
+ *
+ * @param {Node} dom
+ * @param {Props} prevProps
+ * @param {Props} nextProps
+ */
 function updateDom(dom, prevProps, nextProps) {
-  //Remove old or changed event listeners
+  // Remove old or changed event listeners
   Object.keys(prevProps)
     .filter(isEvent)
-    .filter((key) => !(key in nextProps) || isNew(prevProps, nextProps)(key))
-    .forEach((name) => {
-      const eventType = name.toLowerCase().substring(2);
-      dom.removeEventListener(eventType, prevProps[name]);
+    .filter(
+      (prop) =>
+        isPropRemoved(prevProps, nextProps)(prop) ||
+        isPropNew(prevProps, nextProps)(prop)
+    )
+    .forEach((prop) => {
+      const eventType = prop.toLowerCase().slice(2);
+      dom.removeEventListener(eventType, prevProps[prop]);
     });
 
   // Remove old properties
   Object.keys(prevProps)
     .filter(isProperty)
-    .filter(isGone(prevProps, nextProps))
-    .forEach((name) => {
-      dom[name] = '';
+    .filter(isPropRemoved(prevProps, nextProps))
+    .forEach((prop) => {
+      dom[prop] = '';
     });
 
   // Set new or changed properties
   Object.keys(nextProps)
     .filter(isProperty)
-    .filter(isNew(prevProps, nextProps))
-    .forEach((name) => {
-      dom[name] = nextProps[name];
+    .filter(isPropNew(prevProps, nextProps))
+    .forEach((prop) => {
+      dom[prop] = nextProps[prop];
     });
 
   // Add event listeners
   Object.keys(nextProps)
     .filter(isEvent)
-    .filter(isNew(prevProps, nextProps))
+    .filter(isPropNew(prevProps, nextProps))
     .forEach((name) => {
-      const eventType = name.toLowerCase().substring(2);
+      const eventType = name.toLowerCase().slice(2);
       dom.addEventListener(eventType, nextProps[name]);
     });
 }
 
 function commitRoot() {
-  deletions.forEach(commitWork);
-  commitWork(wipRoot.child);
-  currentRoot = wipRoot;
-  wipRoot = null;
+  fibersToDelete.forEach(commitWork);
+  commitWork(wipRootFiber.child);
+  currentRootFiber = wipRootFiber;
+  wipRootFiber = null;
 }
 
+/**
+ *
+ * @param {Fiber} fiber
+ */
 function commitWork(fiber) {
   if (!fiber) {
     return;
   }
 
   let domParentFiber = fiber.parent;
+
   while (!domParentFiber.dom) {
     domParentFiber = domParentFiber.parent;
   }
+
   const domParent = domParentFiber.dom;
 
   if (fiber.effectTag === 'PLACEMENT' && fiber.dom != null) {
@@ -165,6 +240,11 @@ function commitWork(fiber) {
   commitWork(fiber.sibling);
 }
 
+/**
+ *
+ * @param {Fiber} fiber
+ * @param {Node} domParent
+ */
 function commitDeletion(fiber, domParent) {
   if (fiber.dom) {
     domParent.removeChild(fiber.dom);
@@ -173,31 +253,37 @@ function commitDeletion(fiber, domParent) {
   }
 }
 
+/**
+ *
+ * @param {ElementPOJO} element
+ * @param {Node} container
+ */
 function render(element, container) {
-  wipRoot = {
+  wipRootFiber = {
     dom: container,
     props: {
       children: [element],
     },
-    alternate: currentRoot,
+    alternate: currentRootFiber,
   };
-  deletions = [];
-  nextUnitOfWork = wipRoot;
+  fibersToDelete = [];
+  nextUnitOfWorkFiber = wipRootFiber;
+  console.log(wipRootFiber);
 }
 
-let nextUnitOfWork = null;
-let currentRoot = null;
-let wipRoot = null;
-let deletions = null;
-
+/**
+ *
+ * @param {number} deadline
+ */
 function workLoop(deadline) {
   let shouldYield = false;
-  while (nextUnitOfWork && !shouldYield) {
-    nextUnitOfWork = performUnitOfWork(nextUnitOfWork);
+
+  while (nextUnitOfWorkFiber && !shouldYield) {
+    nextUnitOfWorkFiber = performUnitOfWork(nextUnitOfWorkFiber);
     shouldYield = deadline.timeRemaining() < 1;
   }
 
-  if (!nextUnitOfWork && wipRoot) {
+  if (!nextUnitOfWorkFiber && wipRootFiber) {
     commitRoot();
   }
 
@@ -206,17 +292,25 @@ function workLoop(deadline) {
 
 requestIdleCallback(workLoop);
 
+/**
+ *
+ * @param {Fiber} fiber
+ */
 function performUnitOfWork(fiber) {
   const isFunctionComponent = fiber.type instanceof Function;
+
   if (isFunctionComponent) {
     updateFunctionComponent(fiber);
   } else {
     updateHostComponent(fiber);
   }
+
   if (fiber.child) {
     return fiber.child;
   }
+
   let nextFiber = fiber;
+
   while (nextFiber) {
     if (nextFiber.sibling) {
       return nextFiber.sibling;
@@ -225,12 +319,9 @@ function performUnitOfWork(fiber) {
   }
 }
 
-let wipFiber = null;
-let hookIndex = null;
-
 function updateFunctionComponent(fiber) {
   wipFiber = fiber;
-  hookIndex = 0;
+  currHookIndex = 0;
   wipFiber.hooks = [];
   const children = [fiber.type(fiber.props)];
   reconcileChildren(fiber, children);
@@ -240,7 +331,7 @@ function useState(initial) {
   const oldHook =
     wipFiber.alternate &&
     wipFiber.alternate.hooks &&
-    wipFiber.alternate.hooks[hookIndex];
+    wipFiber.alternate.hooks[currHookIndex];
   const hook = {
     state: oldHook ? oldHook.state : initial,
     queue: [],
@@ -253,17 +344,17 @@ function useState(initial) {
 
   const setState = (action) => {
     hook.queue.push(action);
-    wipRoot = {
-      dom: currentRoot.dom,
-      props: currentRoot.props,
-      alternate: currentRoot,
+    wipRootFiber = {
+      dom: currentRootFiber.dom,
+      props: currentRootFiber.props,
+      alternate: currentRootFiber,
     };
-    nextUnitOfWork = wipRoot;
-    deletions = [];
+    nextUnitOfWorkFiber = wipRootFiber;
+    fibersToDelete = [];
   };
 
   wipFiber.hooks.push(hook);
-  hookIndex++;
+  currHookIndex++;
   return [hook.state, setState];
 }
 
@@ -307,7 +398,7 @@ function reconcileChildren(wipFiber, elements) {
     }
     if (oldFiber && !sameType) {
       oldFiber.effectTag = 'DELETION';
-      deletions.push(oldFiber);
+      fibersToDelete.push(oldFiber);
     }
 
     if (oldFiber) {
@@ -332,7 +423,12 @@ function App(props) {
       id: 'app',
       style: 'border: 5px solid purple; padding: 10px; margin: 10px;',
     },
-    [Act.createElement('legend', null, 'App'), Counter()]
+    [
+      Act.createElement('legend', null, 'App'),
+      Counter(),
+      Counter({ start: 5, title: 'Second Counter', subtitle: 'test2 ' }),
+      ,
+    ]
   );
 }
 
@@ -342,10 +438,11 @@ function Counter({
   subtitle = 'test subtitle ',
 } = {}) {
   const [state, setState] = Act.useState(start);
+
   return Act.createElement(
     'fieldset',
     {
-      style: 'border: 3px solid orange; padding: 5px',
+      style: 'border: 3px solid orange; padding: 5px;',
       onClick: () => setState((n) => n + 1),
     },
     [
