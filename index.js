@@ -268,7 +268,6 @@ function render(element, container) {
   };
   fibersToDelete = [];
   nextUnitOfWorkFiber = wipRootFiber;
-  console.log(wipRootFiber);
 }
 
 /**
@@ -317,8 +316,13 @@ function performUnitOfWork(fiber) {
     }
     nextFiber = nextFiber.parent;
   }
+  console.log(wipRootFiber);
 }
 
+/**
+ *
+ * @param {Fiber} fiber
+ */
 function updateFunctionComponent(fiber) {
   wipFiber = fiber;
   currHookIndex = 0;
@@ -358,6 +362,10 @@ function useState(initial) {
   return [hook.state, setState];
 }
 
+/**
+ *
+ * @param {Fiber} fiber
+ */
 function updateHostComponent(fiber) {
   if (!fiber.dom) {
     fiber.dom = createDom(fiber);
@@ -365,6 +373,11 @@ function updateHostComponent(fiber) {
   reconcileChildren(fiber, fiber.props.children.flat());
 }
 
+/**
+ *
+ * @param {Fiber} wipFiber
+ * @param {ElementPOJO[]} elements
+ */
 function reconcileChildren(wipFiber, elements) {
   let index = 0;
   let oldFiber = wipFiber.alternate && wipFiber.alternate.child;
